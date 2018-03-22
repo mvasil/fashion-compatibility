@@ -1,2 +1,3 @@
-# fashion-compatibility
-Learning Type-Aware Embeddings for Fashion Compatibility
+# Learning Type-Aware Embeddings for Fashion Compatibility
+
+Code and dataset coming soon.
