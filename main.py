@@ -5,9 +5,10 @@ import sys
 import shutil
 import torch
 import torch.optim as optim
+from torchvision import transforms
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
-from polyvore_outfits import get_data_loaders
+from polyvore_outfits import TripletImageLoader
 from tripletnet import Tripletnet
 import numpy as np
 import Resnet_18
@@ -33,8 +34,10 @@ parser.add_argument('--resume', default='', type=str,
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('--name', default='Type_Specific_Fashion_Compatibility', type=str,
                     help='name of experiment')
-parser.add_argument('--data_split', default='random', type=str,
-                    help='split of the polyvore outfits data to use (valid inputs: random or disjoint)')
+parser.add_argument('--polyvore_split', default='nondisjoint', type=str,
+                    help='specifies the split of the polyvore data (either disjoint or nondisjoint)')
+parser.add_argument('--datadir', default='data', type=str,
+                    help='directory of the polyvore outfits dataset (default: data)')
 parser.add_argument('--test', dest='test', action='store_true', default=False,
                     help='To only run inference on test set')
 parser.add_argument('--dim_embed', type=int, default=64, metavar='N',
@@ -61,7 +64,7 @@ parser.add_argument('--mask_loss', type=float, default=5e-4, metavar='M',
                     help='parameter for loss for mask norm')
 parser.add_argument('--vse_loss', type=float, default=5e-4, metavar='M',
                     help='parameter for loss for the visual-semantic embedding')
-parser.add_argument('--sim_t_loss', type=float, default=5e-5, metavar='M',
+parser.add_argument('--sim_t_loss', type=float, default=5e-1, metavar='M',
                     help='parameter for loss for text-text similarity')
 parser.add_argument('--sim_i_loss', type=float, default=5e-1, metavar='M',
                     help='parameter for loss for image-image similarity')
@@ -74,7 +77,40 @@ def main():
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    train_loader, test_loader, val_loader = get_data_loaders(args)
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+    kwargs = {'num_workers': 8, 'pin_memory': True} if args.cuda else {}
+    test_loader = torch.utils.data.DataLoader(
+        TripletImageLoader(args, 'test',
+                        transform=transforms.Compose([
+                            transforms.Scale(112),
+                            transforms.CenterCrop(112),
+                            transforms.ToTensor(),
+                            normalize,
+                    ])),
+        batch_size=args.batch_size, shuffle=False, **kwargs)
+
+    train_loader = torch.utils.data.DataLoader(
+        TripletImageLoader(args, 'train',
+                           transform=transforms.Compose([
+                               transforms.Scale(112),
+                               transforms.CenterCrop(112),
+                               transforms.RandomHorizontalFlip(),
+                               transforms.ToTensor(),
+                               normalize,
+                           ])),
+        batch_size=args.batch_size, shuffle=True, **kwargs)
+    val_loader = torch.utils.data.DataLoader(
+        TripletImageLoader(args, 'valid',
+                           transform=transforms.Compose([
+                               transforms.Scale(112),
+                               transforms.CenterCrop(112),
+                               transforms.ToTensor(),
+                               normalize,
+                           ])),
+        batch_size=args.batch_size, shuffle=False, **kwargs)
+    
     text_dim = train_loader.dataset.text_feat_dim
     n_conditions = len(train_loader.dataset.typespaces)
     model = Resnet_18.resnet18(pretrained=True, embedding_size=args.dim_embed)

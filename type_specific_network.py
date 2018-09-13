@@ -99,8 +99,6 @@ class TypeSpecificNet(nn.Module):
                when None including the general embedding concatenated onto the end
         """
         embedded_x = self.embeddingnet(x)
-        norm = torch.norm(embedded_x, p=2, dim=1) + 1e-10
-        embedded_x = embedded_x / norm.expand_as(embedded_x)
         if c is None:
             # used during testing, wants all type specific embeddings returned for an image
             if self.fc_masks:
