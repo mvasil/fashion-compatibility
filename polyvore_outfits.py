@@ -14,7 +14,7 @@ from torch.autograd import Variable
 def default_image_loader(path):
     return Image.open(path).convert('RGB')
 
-def parse_iminfo(question, im2index, gt = None):
+def parse_iminfo(question, im2index, id2im, gt = None):
     """ Maps the questions from the FITB and compatibility tasks back to
         their index in the precomputed matrix of features
 
@@ -25,11 +25,12 @@ def parse_iminfo(question, im2index, gt = None):
     """
     questions = []
     is_correct = np.zeros(len(question), np.bool)
-    for index, im in enumerate(question):
-        set_id = im.split('_')[0]
+    for index, im_id in enumerate(question):
+        set_id = im_id.split('_')[0]
         if gt is None:
             gt = set_id
-            
+
+        im = id2im[im_id]
         questions.append((im2index[im], im))
         is_correct[index] = set_id == gt
 
@@ -53,9 +54,11 @@ def load_typespaces(rootdir, rand_typespaces, num_rand_embed):
 
         typespaces = ts
         return typespaces
-    
+
+    # load a previously created random typespace or create one
+    # if none exist
     width = 0
-    fn = os.path.join(rootdir, 'outfits_rand_%i.p') % num_rand_embed
+    fn = os.path.join(rootdir, 'typespaces_rand_%i.p') % num_rand_embed
     if os.path.isfile(fn):
         typespaces = pickle.load(open(fn, 'rb'))
     else:
@@ -71,7 +74,7 @@ def load_typespaces(rootdir, rand_typespaces, num_rand_embed):
     return typespaces
 
 
-def load_compatibility_questions(fn, im2index):
+def load_compatibility_questions(fn, im2index, id2im):
     """ Returns the list of compatibility questions for the
         split """
     with open(fn, 'r') as f:
@@ -80,48 +83,62 @@ def load_compatibility_questions(fn, im2index):
     compatibility_questions = []
     for line in lines:
         data = line.strip().split()
-        compat_question, _, _ = parse_iminfo(data[1:], im2index)
+        compat_question, _, _ = parse_iminfo(data[1:], im2index, id2im)
         compatibility_questions.append((compat_question, int(data[0])))
 
     return compatibility_questions
 
-def load_fitb_questions(fn, im2index):
+def load_fitb_questions(fn, im2index, id2im):
     """ Returns the list of fill in the blank questions for the
         split """
     data = json.load(open(fn, 'r'))
     questions = []
     for item in data:
         question = item['question']
-        q_index, _, gt = parse_iminfo(question, im2index)
+        q_index, _, gt = parse_iminfo(question, im2index, id2im)
         answer = item['answers']
-        a_index, is_correct, _ = parse_iminfo(answer, im2index, gt)
+        a_index, is_correct, _ = parse_iminfo(answer, im2index, id2im, gt)
         questions.append((q_index, a_index, is_correct))
 
     return questions
 
 class TripletImageLoader(torch.utils.data.Dataset):
-    def __init__(self, args, split, transform=None, loader=default_image_loader):
-        rootdir = os.path.join(args.datadir, 'polyvore', args.polyvore_split)
-        self.impath = os.path.join(rootdir, 'images')
+    def __init__(self, args, split, meta_data, text_dim = None, transform=None, loader=default_image_loader):
+        rootdir = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split)
+        self.impath = os.path.join(args.datadir, 'polyvore_outfits', 'images')
         self.is_train = split == 'train'
-        data_json = os.path.join(rootdir, 'outfits_%s.json' % split)
+        data_json = os.path.join(rootdir, '%s.json' % split)
         outfit_data = json.load(open(data_json, 'r'))
 
         # get list of images and make a mapping used to quickly organize the data
         im2type = {}
+        category2ims = {}
         imnames = set()
+        id2im = {}
         for outfit in outfit_data:
+            outfit_id = outfit['set_id']
             for item in outfit['items']:
-                im = '%s_%i' % (outfit['set_id'], item['index'])
-                im2type[im] = item['coarse_type']
+                im = item['item_id']
+                category = meta_data[im]['semantic_category']
+                im2type[im] = category
+
+                if category not in category2ims:
+                    category2ims[category] = {}
+
+                if outfit_id not in category2ims[category]:
+                    category2ims[category][outfit_id] = []
+
+                category2ims[category][outfit_id].append(im)
+                id2im['%s_%i' % (outfit_id, item['index'])] = im
                 imnames.add(im)
 
+        imnames = list(imnames)
         im2index = {}
         for index, im in enumerate(imnames):
             im2index[im] = index
 
         self.data = outfit_data
-        self.imnames = list(imnames)
+        self.imnames = imnames
         self.im2type = im2type
         self.typespaces = load_typespaces(rootdir, args.rand_typespaces, args.num_rand_embed)
         self.transform = transform
@@ -129,70 +146,79 @@ class TripletImageLoader(torch.utils.data.Dataset):
         self.split = split
 
         if self.is_train:
+            self.text_feat_dim = text_dim
+            self.desc2vecs = {}
+            featfile = os.path.join(rootdir, 'train_hglmm_pca6000.txt')
+            with open(featfile, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    vec = line.split(',')
+                    label = ','.join(vec[:-self.text_feat_dim])
+                    vec = np.array([float(x) for x in vec[-self.text_feat_dim:]], np.float32)
+                    assert(len(vec) == text_dim)
+                    self.desc2vecs[label] = vec
+                    
+            self.im2desc = {}
+            for im in imnames:
+                desc = meta_data[im]['title']
+                if not desc:
+                    desc = meta_data[im]['url_name']
+                    
+                desc = desc.replace('\n','').encode('ascii', 'ignore').strip().lower()
+                
+                # sometimes descriptions didn't map to any known words so they were
+                # removed, so only add those which have a valid feature representation
+                if desc and desc in self.desc2vecs:
+                    self.im2desc[im] = desc
+
             # At train time we pull the list of outfits and enumerate the pairwise
             # comparisons between them to train with.  Negatives are pulled by the
             # __get_item__ function
-            self.desc = {}
-            featfile = h5py.File(os.path.join(rootdir, 'outfits_polyvore_text.h5'), 'r')
-            text_features = np.array(featfile['%s_features' % split], dtype=np.float32)
-            self.text_feat_dim = text_features.shape[1]
-            with open(os.path.join(rootdir, 'outfits_%s_desc.txt' % split)) as f:
-                for index, line in enumerate(f):
-                    self.desc[line.strip()] = text_features[index]
-
             pos_pairs = []
-            type2im = {}
             max_items = 0
-            for i, outfit in enumerate(outfit_data):
+            for outfit in outfit_data:
                 items = outfit['items']
                 cnt = len(items)
                 max_items = max(cnt, max_items)
                 outfit_id = outfit['set_id']
-                for j in range(cnt):
-                    item_type = items[j]['coarse_type']
-                    if item_type not in type2im:
-                        type2im[item_type] = {}
-                        
-                    if outfit_id not in type2im[item_type]:
-                        type2im[item_type][outfit_id] = []
-                            
-                    type2im[item_type][outfit_id].append((i, j))
-
+                for j in range(cnt-1):
                     for k in range(j+1, cnt):
-                        pos_pairs.append([i, j, k])
+                        pos_pairs.append([outfit_id, items[j]['item_id'], items[k]['item_id']])
 
             self.pos_pairs = pos_pairs
-            self.set2im = type2im
+            self.category2ims = category2ims
             self.max_items = max_items
         else:
             # pull the two task's questions for test and val splits
-            fn = os.path.join(rootdir, 'outfits_fill_in_blank_%s_hardneg.json' % split)
-            self.fitb_questions = load_fitb_questions(fn, im2index)
-            fn = os.path.join(rootdir, 'outfits_fashion_compatibility_prediction_%s_hardneg.txt' % split)
-            self.compatibility_questions = load_compatibility_questions(fn, im2index)
+            fn = os.path.join(rootdir, 'fill_in_blank_%s.json' % split)
+            self.fitb_questions = load_fitb_questions(fn, im2index, id2im)
+            fn = os.path.join(rootdir, 'compatibility_%s.txt' % split)
+            self.compatibility_questions = load_compatibility_questions(fn, im2index, id2im)
 
-    def load_train_item(self, data_index, index):
+    def load_train_item(self, image_id):
         """ Returns a single item in the triplet and its data
         """
-        outfit_id = self.data[data_index]['set_id']
-        item = self.data[data_index]['items'][index]
-        imfn = os.path.join(self.impath, '%s/%i.jpg' % (outfit_id, item['index']))
+        imfn = os.path.join(self.impath, '%s.jpg' % image_id)
         img = self.loader(imfn)
         if self.transform is not None:
             img = self.transform(img)
 
-        text = item['name'].replace('\n','').strip().encode('ascii', 'ignore')
-        if text:
-            text_features = self.desc[text]
+        if image_id in self.im2desc:
+            text = self.im2desc[image_id]
+            text_features = self.desc2vecs[text]
             has_text = 1
         else:
             text_features = np.zeros(self.text_feat_dim, np.float32)
-            has_text = 0
-            
-        item_type = item['coarse_type']
+            has_text = 0.
+
+        has_text = np.float32(has_text)
+        item_type = self.im2type[image_id]
         return img, text_features, has_text, item_type
 
-    def sample_negative(self, data_index, item_type):
+    def sample_negative(self, outfit_id, item_id, item_type):
         """ Returns a randomly sampled item from a different set
             than the outfit at data_index, but of the same type as
             item_type
@@ -202,13 +228,17 @@ class TripletImageLoader(torch.utils.data.Dataset):
             item_type: the coarse type of the item that the item
                        that was paired with the anchor
         """
-        outfit_id = self.data[data_index]['set_id']
-        candidate_sets = self.set2im[item_type].keys()
-        candidate_sets.remove(outfit_id)
-        choice = np.random.choice(candidate_sets)
-        items = self.set2im[item_type][choice]
-        item_index = np.random.choice(range(len(items)))
-        return items[item_index]
+        item_out = item_id
+        candidate_sets = self.category2ims[item_type].keys()
+        attempts = 0
+        while item_out == item_id and attempts < 100:
+            choice = np.random.choice(candidate_sets)
+            items = self.category2ims[item_type][choice]
+            item_index = np.random.choice(range(len(items)))
+            item_out = items[item_index]
+            attempts += 1
+                
+        return item_out
 
     def get_typespace(self, anchor, pair):
         """ Returns the index of the type specific embedding
@@ -301,18 +331,17 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         if self.is_train:
-            data_index, anchor_index, pos_index = self.pos_pairs[index]
-            img1, desc1, has_text1, anchor_type = self.load_train_item(data_index, anchor_index)
-            img2, desc2, has_text2, item_type = self.load_train_item(data_index, pos_index)
+            outfit_id, anchor_im, pos_im = self.pos_pairs[index]
+            img1, desc1, has_text1, anchor_type = self.load_train_item(anchor_im)
+            img2, desc2, has_text2, item_type = self.load_train_item(pos_im)
             
-            neg_data_index, neg_index = self.sample_negative(data_index, item_type)
-            img3, desc3, has_text3, _ = self.load_train_item(neg_data_index, neg_index)
+            neg_im = self.sample_negative(outfit_id, pos_im, item_type)
+            img3, desc3, has_text3, _ = self.load_train_item(neg_im)
             condition = self.get_typespace(anchor_type, item_type)
             return img1, desc1, has_text1, img2, desc2, has_text2, img3, desc3, has_text3, condition
 
-        anchor = self.imnames[index].replace('_', '/')
-        img1 = '%s/%s.jpg' % (self.impath, anchor)
-        img1 = self.loader(img1)
+        anchor = self.imnames[index]
+        img1 = self.loader(os.path.join(self.impath, '%s.jpg' % anchor))
         if self.transform is not None:
             img1 = self.transform(img1)
             
