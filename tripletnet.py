@@ -56,6 +56,7 @@ class Tripletnet(nn.Module):
         self.metric_branch = None
         if args.learned_metric:
             self.metric_branch = nn.Linear(args.dim_embed, 1, bias=False)
+
             # initilize as having an even weighting across all dimensions
             weight = torch.zeros(1,args.dim_embed)/float(args.dim_embed)
             self.metric_branch.weight = nn.Parameter(weight)
@@ -88,6 +89,7 @@ class Tripletnet(nn.Module):
         if dist_a.is_cuda:
             target = target.cuda()
         target = Variable(target)
+
         # type specific triplet loss
         loss_triplet = self.criterion(dist_a, dist_b, target)
         acc = accuracy(dist_a, dist_b)
@@ -96,8 +98,8 @@ class Tripletnet(nn.Module):
         disti_p = F.pairwise_distance(general_y, general_z, 2)
         disti_n1 = F.pairwise_distance(general_y, general_x, 2)
         disti_n2 = F.pairwise_distance(general_z, general_x, 2)
-        loss_sim_i1 = self.criterion(disti_n1, disti_p, target)
-        loss_sim_i2 = self.criterion(disti_n2, disti_p, target)
+        loss_sim_i1 = self.criterion(disti_p, disti_n1, target)
+        loss_sim_i2 = self.criterion(disti_p, disti_n2, target)
         loss_sim_i = (loss_sim_i1 + loss_sim_i2) / 2.
 
         return acc, loss_triplet, loss_sim_i, loss_mask, loss_embed, general_x, general_y, general_z
@@ -110,9 +112,9 @@ class Tripletnet(nn.Module):
         desc_x = self.text_branch(x.text)
         desc_y = self.text_branch(y.text)
         desc_z = self.text_branch(z.text)
-        distd_p = F.pairwise_distance(desc_x, desc_z, 2)
+        distd_p = F.pairwise_distance(desc_y, desc_z, 2)
         distd_n1 = F.pairwise_distance(desc_x, desc_y, 2)
-        distd_n2 = F.pairwise_distance(desc_z, desc_y, 2)
+        distd_n2 = F.pairwise_distance(desc_x, desc_z, 2)
         has_text = x.has_text * y.has_text * z.has_text
         loss_sim_t1 = selective_margin_loss(distd_p, distd_n1, self.margin, has_text)
         loss_sim_t2 = selective_margin_loss(distd_p, distd_n2, self.margin, has_text)

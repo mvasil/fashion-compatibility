@@ -71,7 +71,7 @@ class TypeSpecificNet(nn.Module):
                     # initialize masks
                     mask_array = np.zeros([n_conditions, args.dim_embed])
                     mask_array.fill(0.1)
-                    mask_len = int(embedding_size / n_conditions)
+                    mask_len = int(args.dim_embed / n_conditions)
                     for i in range(n_conditions):
                         mask_array[i, i*mask_len:(i+1)*mask_len] = 1
                     # no gradients for the masks
