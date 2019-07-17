@@ -139,7 +139,7 @@ class TypeSpecificNet(nn.Module):
 
         embed_norm = embedded_x.norm(2)
         if self.l2_norm:
-            norm = torch.norm(masked_embedding, p=2, dim=1) + 1e-10
+            norm = torch.norm(masked_embedding, p=2, dim=1, keepdim=True) + 1e-10
             masked_embedding = masked_embedding / norm.expand_as(masked_embedding)
 
         return masked_embedding, mask_norm, embed_norm, embedded_x
