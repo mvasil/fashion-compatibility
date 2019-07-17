@@ -76,9 +76,15 @@ parser.add_argument('--sim_t_loss', type=float, default=5e-5, metavar='M',
 parser.add_argument('--sim_i_loss', type=float, default=5e-5, metavar='M',
                     help='parameter for loss for image-image similarity')
 
+from functools import partial
+import pickle
 def main():
     global args
     args = parser.parse_args()
+    ##################### encoding problem #########################
+    pickle.load = partial(pickle.load, encoding='latin1')
+    pickle.Unpickler = partial(pickle.Unpickler, encoding='latin1')
+    ##################### encoding problem #########################
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     torch.manual_seed(args.seed)
     if args.cuda:
@@ -91,6 +97,7 @@ def main():
     meta_data = json.load(open(fn, 'r'))
     text_feature_dim = 6000
     kwargs = {'num_workers': 8, 'pin_memory': True} if args.cuda else {}
+    print('loading testing data...')
     test_loader = torch.utils.data.DataLoader(
         TripletImageLoader(args, 'test', meta_data,
                            transform=transforms.Compose([
@@ -109,6 +116,7 @@ def main():
     if args.cuda:
         tnet.cuda()
 
+    print('loading training data...')
     train_loader = torch.utils.data.DataLoader(
         TripletImageLoader(args, 'train', meta_data,
                            text_dim=text_feature_dim,
@@ -135,7 +143,10 @@ def main():
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
+            if arga.cuda:
+                checkpoint = torch.load(args.resume)
+            else:
+                checkpoint = torch.load(args.resume, map_location=lambda storage, loc: storage, pickle_module=pickle)
             args.start_epoch = checkpoint['epoch']
             best_acc = checkpoint['best_prec1']
             tnet.load_state_dict(checkpoint['state_dict'])
@@ -170,8 +181,10 @@ def main():
             'state_dict': tnet.state_dict(),
             'best_prec1': best_acc,
         }, is_best)
-
-    checkpoint = torch.load('runs/%s/'%(args.name) + 'model_best.pth.tar')
+    if args.cuda:
+        checkpoint = torch.load('runs/%s/'%(args.name) + 'model_best.pth.tar')
+    else:
+        checkpoint = torch.load('runs/%s/'%(args.name) + 'model_best.pth.tar' ,map_location=lambda storage, loc: storage, pickle_module=pickle)
     tnet.load_state_dict(checkpoint['state_dict'])
     test_acc = test(test_loader, tnet)
 
