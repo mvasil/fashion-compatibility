@@ -44,7 +44,7 @@ class EmbedBranch(nn.Module):
         x = self.fc2(x)
         
         # L2 normalize each feature vector
-        norm = torch.norm(x, p=2, dim=1) + 1e-10
+        norm = torch.norm(x, p=2, dim=1, keepdim=True) + 1e-10
         x = x / norm.expand_as(x)
         return x
 
