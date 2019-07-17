@@ -232,7 +232,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         candidate_sets = self.category2ims[item_type].keys()
         attempts = 0
         while item_out == item_id and attempts < 100:
-            choice = np.random.choice(candidate_sets)
+            choice = np.random.choice(list(candidate_sets))
             items = self.category2ims[item_type][choice]
             item_index = np.random.choice(range(len(items)))
             item_out = items[item_index]
