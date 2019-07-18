@@ -4,6 +4,7 @@ import os
 import sys
 import shutil
 import json
+from tqdm import tqdm
 
 import numpy as np
 
@@ -47,6 +48,8 @@ parser.add_argument('--datadir', default='data', type=str,
                     help='directory of the polyvore outfits dataset (default: data)')
 parser.add_argument('--test', dest='test', action='store_true', default=False,
                     help='To only run inference on test set')
+parser.add_argument('--sstest', dest='sstest', action='store_true', default=False,
+                    help='To only run inference on similarity search test set')
 parser.add_argument('--dim_embed', type=int, default=64, metavar='N',
                     help='how many dimensions in embedding (default: 64)')
 parser.add_argument('--use_fc', action='store_true', default=False,
@@ -97,16 +100,30 @@ def main():
     meta_data = json.load(open(fn, 'r'))
     text_feature_dim = 6000
     kwargs = {'num_workers': 8, 'pin_memory': True} if args.cuda else {}
-    print('loading testing data...')
-    test_loader = torch.utils.data.DataLoader(
-        TripletImageLoader(args, 'test', meta_data,
-                           transform=transforms.Compose([
-                               transforms.Scale(112),
-                               transforms.CenterCrop(112),
-                               transforms.ToTensor(),
-                               normalize,
-                           ])),
-        batch_size=args.batch_size, shuffle=False, **kwargs)
+    
+    if args.test:
+        print('loading testing data...')
+        test_loader = torch.utils.data.DataLoader(
+            TripletImageLoader(args, 'test', meta_data,
+                            transform=transforms.Compose([
+                                transforms.Scale(112),
+                                transforms.CenterCrop(112),
+                                transforms.ToTensor(),
+                                normalize,
+                            ])),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
+
+    if args.sstest:
+        print('loading similarity search testing data...')
+        test_loader = torch.utils.data.DataLoader(
+            TripletImageLoader(args, 'ss_test', meta_data,
+                            transform=transforms.Compose([
+                                transforms.Scale(112),
+                                transforms.CenterCrop(112),
+                                transforms.ToTensor(),
+                                normalize,
+                            ])),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
 
     model = Resnet_18.resnet18(pretrained=True, embedding_size=args.dim_embed)
     csn_model = TypeSpecificNet(args, model, len(test_loader.dataset.typespaces))
@@ -116,34 +133,35 @@ def main():
     if args.cuda:
         tnet.cuda()
 
-    print('loading training data...')
-    train_loader = torch.utils.data.DataLoader(
-        TripletImageLoader(args, 'train', meta_data,
-                           text_dim=text_feature_dim,
-                           transform=transforms.Compose([
-                               transforms.Scale(112),
-                               transforms.CenterCrop(112),
-                               transforms.RandomHorizontalFlip(),
-                               transforms.ToTensor(),
-                               normalize,
-                           ])),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-    val_loader = torch.utils.data.DataLoader(
-        TripletImageLoader(args, 'valid', meta_data,
-                           transform=transforms.Compose([
-                               transforms.Scale(112),
-                               transforms.CenterCrop(112),
-                               transforms.ToTensor(),
-                               normalize,
-                           ])),
-        batch_size=args.batch_size, shuffle=False, **kwargs)
+    if not args.test and not args.sstest:
+        print('loading training data...')
+        train_loader = torch.utils.data.DataLoader(
+            TripletImageLoader(args, 'train', meta_data,
+                            text_dim=text_feature_dim,
+                            transform=transforms.Compose([
+                                transforms.Scale(112),
+                                transforms.CenterCrop(112),
+                                transforms.RandomHorizontalFlip(),
+                                transforms.ToTensor(),
+                                normalize,
+                            ])),
+            batch_size=args.batch_size, shuffle=True, **kwargs)
+        val_loader = torch.utils.data.DataLoader(
+            TripletImageLoader(args, 'valid', meta_data,
+                            transform=transforms.Compose([
+                                transforms.Scale(112),
+                                transforms.CenterCrop(112),
+                                transforms.ToTensor(),
+                                normalize,
+                            ])),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
 
     best_acc = 0
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
-            if arga.cuda:
+            if args.cuda:
                 checkpoint = torch.load(args.resume)
             else:
                 checkpoint = torch.load(args.resume, map_location=lambda storage, loc: storage, pickle_module=pickle)
@@ -154,6 +172,11 @@ def main():
                     .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
+
+    if args.sstest:
+        print('start similarity search')
+        test_acc = similarity_search(test_loader, tnet)
+        sys.exit()
 
     cudnn.benchmark = True    
     if args.test:
@@ -266,6 +289,31 @@ def test(test_loader, tnet):
         round(auc, 2), round(acc * 100, 1)))
     
     return total
+
+def similarity_search(test_loader, tnet):
+    print('=> loading embeddings')
+    # switch to evaluation mode
+    tnet.eval()
+    embeddings = []
+    # embedding_path = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split, 'embeddings.pt')
+    # embeddings = torch.load(embedding_path)
+    
+    # for test/val data we get images only from the data loader
+    for batch_idx, images in tqdm(enumerate(test_loader)):
+        if args.cuda:
+            images = images.cuda()
+        images = Variable(images)
+        embeddings.append(tnet.embeddingnet(images).data)
+
+    embeddings = torch.cat(embeddings)
+    metric = tnet.metric_branch
+    acc = test_loader.dataset.test_similarity_search(embeddings, metric)
+
+    print('\n{} set: Similarity Search Accuracy: {:.1f}\n'.format(
+        test_loader.dataset.split,
+        round(acc * 100, 1)))
+    
+    return acc
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """Saves checkpoint to disk"""

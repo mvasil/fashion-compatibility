@@ -9,3 +9,4 @@ torchvision==0.1.6
 tensorflow==1.9.0
 h5py
 scikit-learn
+tqdm

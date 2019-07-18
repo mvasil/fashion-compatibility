@@ -10,6 +10,7 @@ import pickle
 import h5py
 from sklearn.metrics import roc_auc_score
 from torch.autograd import Variable
+from tqdm import tqdm
 
 def default_image_loader(path):
     return Image.open(path).convert('RGB')
@@ -102,11 +103,27 @@ def load_fitb_questions(fn, im2index, id2im):
 
     return questions
 
+def load_ss_questions(fn, im2index, id2im):
+    """ Returns the list of similarity search questions for the
+        split"""
+    data = json.load(open(fn, 'r'))
+    ss_questions = []
+    for the_set in data:
+        questions = []
+        items = the_set['items']
+        for item in items:
+            im = item['item_id']
+            questions.append((im2index[im], im))
+        ss_questions.append((questions, the_set['set_id']))
+
+    return ss_questions
+
 class TripletImageLoader(torch.utils.data.Dataset):
     def __init__(self, args, split, meta_data, text_dim = None, transform=None, loader=default_image_loader):
         rootdir = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split)
         self.impath = os.path.join(args.datadir, 'polyvore_outfits', 'images')
         self.is_train = split == 'train'
+        self.is_sstest = split == 'ss_test'
         data_json = os.path.join(rootdir, '%s.json' % split)
         outfit_data = json.load(open(data_json, 'r'))
 
@@ -191,6 +208,11 @@ class TripletImageLoader(torch.utils.data.Dataset):
             self.pos_pairs = pos_pairs
             self.category2ims = category2ims
             self.max_items = max_items
+        elif self.is_sstest:
+            self.category2ims = category2ims
+            self.im2index = im2index
+            fn = os.path.join(rootdir, '%s.json' % split)
+            self.ss_questions = load_ss_questions(fn, im2index, id2im)
         else:
             # pull the two task's questions for test and val splits
             fn = os.path.join(rootdir, 'fill_in_blank_%s.json' % split)
@@ -321,13 +343,66 @@ class TripletImageLoader(torch.utils.data.Dataset):
                         score += metric(Variable(embed1 * embed2)).data
 
                 answer_score[index] = score.squeeze().cpu().numpy()
-                            
+
             correct += is_correct[np.argmin(answer_score)]
             n_questions += 1
                         
         # scores are based on distances so need to convert them so higher is better
         acc = correct / n_questions
         return acc
+
+    def test_similarity_search(self, embeds, metric):
+        """ Return the accuracy of the similarity search task
+
+            embeds: precomputed embedding features used to score
+                    each compatibility question
+            metric: a function used to score the elementwise product
+                    of a pair of embeddings, if None euclidean
+                    distance is used
+        """
+        top_n = 3
+        correct = 0
+        n_search = 0
+        for q_index, (questions, gt) in tqdm(enumerate(self.ss_questions)):
+            for question, img1 in questions:
+                type1 = self.im2type[img1]
+                for question, img_gt in questions:
+                    type2 = self.im2type[img_gt]
+                    if type1 == type2: # Don't need to outfit same category
+                        continue
+                    outfits = self.category2ims[type2] # get all the items with same catogory
+                    dist = []
+                    for outfit_id, outfit in outfits.items():
+                        for img2 in outfit:
+                            assert type2 == self.im2type[img2] # make sure we get items from correct category
+                            condition = self.get_typespace(type1, type2)
+                            embed1 = embeds[question][condition].unsqueeze(0)
+                            embed2 = embeds[self.im2index[img2]][condition].unsqueeze(0)
+                            if metric is None:
+                                dist.append((outfit_id, img2, torch.nn.functional.pairwise_distance(embed1, embed2, 2)))
+                            else:
+                                dist.append(outfit_id, img2, metric(Variable(embed1 * embed2)).data)
+                    dist.sort(key=lambda k: k[2][0][0])
+                    for sid, img, d in dist[:top_n]:
+                        if sid == gt:
+                            correct += 1
+                            break
+                    n_search += 1
+
+                    """
+                    Display results
+                    
+                    Inputs:
+                    img1: (str) query image id
+                    img_gt: (str) ground truth image id
+                    dist: (tuple) set_id, result image id, and distance
+                    """
+
+        print(correct)
+        print(n_search)
+        acc = correct / n_search
+        return acc
+
 
     def __getitem__(self, index):
         if self.is_train:

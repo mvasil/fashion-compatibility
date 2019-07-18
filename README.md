@@ -30,6 +30,14 @@ We have provided a pre-trained model for the nondisjoint data split which you ca
 
 This code includes some minor modifications resulting in better perfromance than the version used for our camera ready.  For example, our pre-trained model should provide a compatibility AUC of 0.88 and fill-in-the-blank accuracy of 57.6, which is a little better than the 0.86 AUC/55.3 accuracy for our best model reported in our paper.
 
+Similarity search test:
+
+Put ss_test.json in the folder:`data/polyvore_outfits/nondisjoint/`
+
+```sh
+python main.py --sstest --l2_embed --no-cuda --resume runs/nondisjoint_l2norm/model_best.pth.tar
+```
+
 ## Training a new model
 
 To train the pre-trained model above we used the following command.
