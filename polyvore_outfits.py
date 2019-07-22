@@ -8,12 +8,34 @@ import json
 import torch
 import pickle
 import h5py
+import time
 from sklearn.metrics import roc_auc_score
 from torch.autograd import Variable
 from tqdm import tqdm
 
 def default_image_loader(path):
     return Image.open(path).convert('RGB')
+
+def showresults(v_html, query_folder, answer_folder, query_img, img_cat, gt_img=None, dist=None):
+    """ Display results
+    
+        Inputs:
+        img1: (str) query image id
+        dist: (tuple) set_id, result image id, and distance
+    """
+    img_width = str(300)
+    v_html.write("<div id=\"image-table\"><table><tr>")
+    v_html.write("<td style=\"padding:5px\">")
+    v_html.write("<img src=\""+os.path.join('../', query_folder, query_img+'.jpg') + "\" width=\"{}\">".format(img_width))
+    v_html.write("<p style=\"text-align:center;font-size:30px;\">{}</p></td>".format(img_cat[0]))
+    if gt_img:
+        v_html.write("<img src=\""+os.path.join('../', query_folder, gt_img+'.jpg') + "\" width=\"{}\">".format(img_width))
+    for outid, img2, n in dist:
+        v_html.write("<td style=\"padding:5px\">")
+        v_html.write("<img src=\""+os.path.join('../', answer_folder, img2+'.jpg') + "\" width=\"{}\">".format(img_width))
+        v_html.write("<p style=\"text-align:center;font-size:30px;\">{}</p></td>".format(img_cat[1]))
+    v_html.write("</tr></table></div>")
+    v_html.write("<br>")
 
 def parse_iminfo(question, im2index, id2im, gt = None):
     """ Maps the questions from the FITB and compatibility tasks back to
@@ -118,12 +140,26 @@ def load_ss_questions(fn, im2index, id2im):
 
     return ss_questions
 
+def load_wild_questions(fn):
+    """ Returns the list of wild questions for the
+        split"""
+    with open(fn, 'r') as f:
+        lines = f.readlines()
+
+    wild_questions = []
+    for i, line in enumerate(lines):
+        img, cat = line.strip().split()
+        wild_questions.append((img, cat))
+
+    return wild_questions
+
 class TripletImageLoader(torch.utils.data.Dataset):
     def __init__(self, args, split, meta_data, text_dim = None, transform=None, loader=default_image_loader):
         rootdir = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split)
         self.impath = os.path.join(args.datadir, 'polyvore_outfits', 'images')
+        self.query_impath = os.path.join(args.datadir, 'polyvore_outfits', 'query_images')
         self.is_train = split == 'train'
-        self.is_sstest = split == 'ss_test'
+        self.mode = split
         data_json = os.path.join(rootdir, '%s.json' % split)
         outfit_data = json.load(open(data_json, 'r'))
 
@@ -149,10 +185,19 @@ class TripletImageLoader(torch.utils.data.Dataset):
                 id2im['%s_%i' % (outfit_id, item['index'])] = im
                 imnames.add(im)
 
-        imnames = list(imnames)
         im2index = {}
-        for index, im in enumerate(imnames):
-            im2index[im] = index
+        if args.load_embed:
+            with open(os.path.join(rootdir, 'embed_index.txt'), 'r') as f:
+                img_order = f.read().splitlines()
+                imnames = img_order
+                for index, im in enumerate(img_order):
+                    im2index[im] = index
+        else:
+            imnames = list(imnames)
+            with open(os.path.join(rootdir, 'embed_index.txt'), 'w') as f:
+                for index, im in enumerate(imnames):
+                    im2index[im] = index
+                    f.write(im+"\n")
 
         self.data = outfit_data
         self.imnames = imnames
@@ -208,11 +253,12 @@ class TripletImageLoader(torch.utils.data.Dataset):
             self.pos_pairs = pos_pairs
             self.category2ims = category2ims
             self.max_items = max_items
-        elif self.is_sstest:
+        elif self.mode == 'ss_test':
             self.category2ims = category2ims
             self.im2index = im2index
-            fn = os.path.join(rootdir, '%s.json' % split)
-            self.ss_questions = load_ss_questions(fn, im2index, id2im)
+            fn = os.path.join(rootdir, 'query.txt')
+            # self.ss_questions = load_ss_questions(fn, im2index, id2im)
+            self.wild_questions = load_wild_questions(fn)
         else:
             # pull the two task's questions for test and val splits
             fn = os.path.join(rootdir, 'fill_in_blank_%s.json' % split)
@@ -346,11 +392,12 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
             correct += is_correct[np.argmin(answer_score)]
             n_questions += 1
-                        
+
         # scores are based on distances so need to convert them so higher is better
         acc = correct / n_questions
         return acc
 
+    # Deprecated
     def test_similarity_search(self, embeds, metric):
         """ Return the accuracy of the similarity search task
 
@@ -360,7 +407,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
                     of a pair of embeddings, if None euclidean
                     distance is used
         """
-        top_n = 3
+        top_n = 1
         correct = 0
         n_search = 0
         for q_index, (questions, gt) in tqdm(enumerate(self.ss_questions)):
@@ -397,12 +444,48 @@ class TripletImageLoader(torch.utils.data.Dataset):
                     img_gt: (str) ground truth image id
                     dist: (tuple) set_id, result image id, and distance
                     """
+                    showresults(img1, img_gt, dist[:top_n])
 
         print(correct)
         print(n_search)
         acc = correct / n_search
         return acc
 
+    def wild_similarity_search(self, query_embeds, embeds, metric, top_n=30):
+        """ Return the results of the similarity search task
+
+            query_embeds: precomputed embedding features from
+                          wild images
+            embeds: precomputed embedding features used to score
+                    each compatibility question
+            metric: a function used to score the elementwise product
+                    of a pair of embeddings, if None euclidean
+                    distance is used
+        """
+        html_writer = open('./results/result.html', 'w')
+        correct = 0
+        n_search = 0
+        for q_index, (img1, type1) in enumerate(tqdm(self.wild_questions)):
+            for type2, outfits in self.category2ims.items():
+                dist = []
+                imgs_set = set()
+                for outfit_id, outfit in outfits.items():
+                    for img in outfit:
+                        imgs_set.add(img)
+                imgs_list = list(imgs_set)
+                for img2 in imgs_list:
+                    assert type2 == self.im2type[img2] # make sure we get items from correct category
+                    condition = self.get_typespace(type1, type2)
+                    embed1 = query_embeds[q_index][condition].unsqueeze(0)
+                    embed2 = embeds[self.im2index[img2]][condition].unsqueeze(0)
+                    if metric is None:
+                        dist.append((outfit_id, img2, torch.nn.functional.pairwise_distance(embed1, embed2, 2)))
+                    else:
+                        dist.append(outfit_id, img2, metric(Variable(embed1 * embed2)).data)
+                dist.sort(key=lambda k: k[2][0][0])
+                showresults(v_html=html_writer, query_folder=self.query_impath, answer_folder=self.impath,
+                            query_img=img1, img_cat=(type1, type2), dist=dist[:100:5])
+        html_writer.close()
 
     def __getitem__(self, index):
         if self.is_train:

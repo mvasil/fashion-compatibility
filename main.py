@@ -17,7 +17,7 @@ from torch.autograd import Variable
 import torch.backends.cudnn as cudnn
 
 import Resnet_18
-from polyvore_outfits import TripletImageLoader
+from polyvore_outfits import TripletImageLoader, default_image_loader
 from tripletnet import Tripletnet
 from type_specific_network import TypeSpecificNet
 
@@ -78,6 +78,8 @@ parser.add_argument('--sim_t_loss', type=float, default=5e-5, metavar='M',
                     help='parameter for loss for text-text similarity')
 parser.add_argument('--sim_i_loss', type=float, default=5e-5, metavar='M',
                     help='parameter for loss for image-image similarity')
+parser.add_argument('--load_embed', dest='load_embed', action='store_false', default=True,
+                    help='Load precomputed embeddings')
 
 from functools import partial
 import pickle
@@ -174,8 +176,7 @@ def main():
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     if args.sstest:
-        print('start similarity search')
-        test_acc = similarity_search(test_loader, tnet)
+        similarity_search(os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split, 'query.txt') ,test_loader, tnet)
         sys.exit()
 
     cudnn.benchmark = True    
@@ -290,30 +291,62 @@ def test(test_loader, tnet):
     
     return total
 
-def similarity_search(test_loader, tnet):
-    print('=> loading embeddings')
+def similarity_search(query_path, test_loader, tnet):
     # switch to evaluation mode
     tnet.eval()
+    query_embeddings = []
+ 
+    with open(query_path, 'r') as f:
+        lines = f.readlines()
+
+    print('=> loading query embeddings')
+
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    trasform = transforms.Compose([transforms.Scale(112),
+                                   transforms.CenterCrop(112),
+                                   transforms.ToTensor(),
+                                   normalize,
+                                  ])
+
+    for line in tqdm(lines):
+        images, _ = line.split()
+        images = os.path.join(args.datadir, 'polyvore_outfits', 'query_images', '%s.jpg' % images)
+        images = default_image_loader(images)
+        images = trasform(images)
+        if args.cuda:
+            images = images.cuda()
+        images = Variable(images).view(-1, images.size()[0], images.size()[1], images.size()[2])
+        query_embeddings.append(tnet.embeddingnet(images).data)
+
+    query_embeddings = torch.cat(query_embeddings)
+
+    print('=> loading test embeddings')
+
+    embedding_path = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split, 'test_embeddings.pt')
+
+    if not args.load_embed:
+        compute_and_save_embeddings(test_loader, tnet)
+    
+    embeddings = torch.load(embedding_path)
+    metric = tnet.metric_branch
+
+    print('=> start similarity search')
+    test_loader.dataset.wild_similarity_search(query_embeddings, embeddings, metric)
+
+def compute_and_save_embeddings(test_loader, tnet):
     embeddings = []
-    # embedding_path = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split, 'embeddings.pt')
-    # embeddings = torch.load(embedding_path)
     
     # for test/val data we get images only from the data loader
-    for batch_idx, images in tqdm(enumerate(test_loader)):
+    for batch_idx, images in enumerate(tqdm(test_loader)):
         if args.cuda:
             images = images.cuda()
         images = Variable(images)
         embeddings.append(tnet.embeddingnet(images).data)
 
     embeddings = torch.cat(embeddings)
-    metric = tnet.metric_branch
-    acc = test_loader.dataset.test_similarity_search(embeddings, metric)
 
-    print('\n{} set: Similarity Search Accuracy: {:.1f}\n'.format(
-        test_loader.dataset.split,
-        round(acc * 100, 1)))
-    
-    return acc
+    torch.save(embeddings, os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split, 'test_embeddings.pt'))
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """Saves checkpoint to disk"""
