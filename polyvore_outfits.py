@@ -156,7 +156,7 @@ def load_wild_questions(fn):
 class TripletImageLoader(torch.utils.data.Dataset):
     def __init__(self, args, split, meta_data, text_dim = None, transform=None, loader=default_image_loader):
         rootdir = os.path.join(args.datadir, 'polyvore_outfits', args.polyvore_split)
-        self.impath = os.path.join(args.datadir, 'polyvore_outfits', 'images')
+        self.impath = os.path.join(args.datadir, 'polyvore_outfits', 'gray_images') # Change image location if train with grayscale
         self.query_impath = os.path.join(args.datadir, 'polyvore_outfits', 'query_images')
         self.is_train = split == 'train'
         self.mode = split
@@ -185,19 +185,25 @@ class TripletImageLoader(torch.utils.data.Dataset):
                 id2im['%s_%i' % (outfit_id, item['index'])] = im
                 imnames.add(im)
 
-        im2index = {}
-        if args.load_embed:
-            with open(os.path.join(rootdir, 'embed_index.txt'), 'r') as f:
-                img_order = f.read().splitlines()
-                imnames = img_order
-                for index, im in enumerate(img_order):
-                    im2index[im] = index
+        if self.mode == 'ss_test':
+            im2index = {}
+            if args.load_embed:
+                with open(os.path.join(rootdir, 'embed_index.txt'), 'r') as f:
+                    img_order = f.read().splitlines()
+                    imnames = img_order
+                    for index, im in enumerate(img_order):
+                        im2index[im] = index
+            else:
+                imnames = sorted(list(imnames))
+                with open(os.path.join(rootdir, 'embed_index.txt'), 'w') as f:
+                    for index, im in enumerate(imnames):
+                        im2index[im] = index
+                        f.write(im+"\n")
         else:
-            imnames = list(imnames)
-            with open(os.path.join(rootdir, 'embed_index.txt'), 'w') as f:
-                for index, im in enumerate(imnames):
-                    im2index[im] = index
-                    f.write(im+"\n")
+            imnames = sorted(list(imnames))
+            im2index = {}
+            for index, im in enumerate(imnames):
+                im2index[im] = index
 
         self.data = outfit_data
         self.imnames = imnames
@@ -300,7 +306,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         candidate_sets = self.category2ims[item_type].keys()
         attempts = 0
         while item_out == item_id and attempts < 100:
-            choice = np.random.choice(candidate_sets)
+            choice = np.random.choice(list(candidate_sets))
             items = self.category2ims[item_type][choice]
             item_index = np.random.choice(range(len(items)))
             item_out = items[item_index]
@@ -484,7 +490,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
                         dist.append(outfit_id, img2, metric(Variable(embed1 * embed2)).data)
                 dist.sort(key=lambda k: k[2][0][0])
                 showresults(v_html=html_writer, query_folder=self.query_impath, answer_folder=self.impath,
-                            query_img=img1, img_cat=(type1, type2), dist=dist[:100:5])
+                            query_img=img1, img_cat=(type1, type2), dist=dist[:20])
         html_writer.close()
 
     def __getitem__(self, index):

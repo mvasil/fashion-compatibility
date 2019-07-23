@@ -103,7 +103,7 @@ def main():
     text_feature_dim = 6000
     kwargs = {'num_workers': 8, 'pin_memory': True} if args.cuda else {}
     
-    if args.test:
+    if args.test or not args.sstest:
         print('loading testing data...')
         test_loader = torch.utils.data.DataLoader(
             TripletImageLoader(args, 'test', meta_data,
