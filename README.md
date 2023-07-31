@@ -20,6 +20,12 @@ You can download the Polyvore Outfits dataset including the splits and questions
     python main.py --help
 ```
 
+## IMPORTANT Information for this fork
+- The version of Python used is `3.9.0`
+- The version of Pytorch used is `2.0.0`
+
+
+
 ## Using a pre-trained model
 
 We have provided a pre-trained model for the nondisjoint data split which you can download [here (11M)](https://drive.google.com/file/d/1JrRgM_EaLQqLw1CNjM65XnTm9rZyLRgj/view?usp=sharing).  This model learns diagonal projections from the general embedding to a type-specific compatibility space which is L2 normalized after appying the projection.  You can test this model using:

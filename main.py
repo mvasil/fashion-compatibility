@@ -94,7 +94,7 @@ def main():
     test_loader = torch.utils.data.DataLoader(
         TripletImageLoader(args, 'test', meta_data,
                            transform=transforms.Compose([
-                               transforms.Scale(112),
+                               transforms.Resize(112),
                                transforms.CenterCrop(112),
                                transforms.ToTensor(),
                                normalize,
@@ -113,7 +113,7 @@ def main():
         TripletImageLoader(args, 'train', meta_data,
                            text_dim=text_feature_dim,
                            transform=transforms.Compose([
-                               transforms.Scale(112),
+                               transforms.Resize(112),
                                transforms.CenterCrop(112),
                                transforms.RandomHorizontalFlip(),
                                transforms.ToTensor(),
@@ -123,7 +123,7 @@ def main():
     val_loader = torch.utils.data.DataLoader(
         TripletImageLoader(args, 'valid', meta_data,
                            transform=transforms.Compose([
-                               transforms.Scale(112),
+                               transforms.Resize(112),
                                transforms.CenterCrop(112),
                                transforms.ToTensor(),
                                normalize,
