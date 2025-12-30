@@ -14,7 +14,7 @@ This code was tested on an Ubuntu 16.04 system using Pytorch version 0.1.12.  It
 
 ## Usage
 
-You can download the Polyvore Outfits dataset including the splits and questions for the compatibility and fill-in-the-blank tasks from [here (6G)](https://drive.google.com/file/d/13-J4fAPZahauaGycw3j_YvbAHO7tOTW5/view?usp=sharing).  The code assumes you unpacked it in a dictory called `data`, but if you choose a different directory simply set the `--datadir` argument.  You can see a listing and description of the model options with:
+You can download the Polyvore Outfits dataset including the splits and questions for the compatibility and fill-in-the-blank tasks from [here (6G)]([https://drive.google.com/file/d/13-J4fAPZahauaGycw3j_YvbAHO7tOTW5/view?usp=sharing](https://huggingface.co/datasets/mvasil/polyvore-outfits)).  The code assumes you unpacked it in a dictory called `data`, but if you choose a different directory simply set the `--datadir` argument.  You can see a listing and description of the model options with:
 
 ```sh
     python main.py --help
